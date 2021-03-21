@@ -9,7 +9,7 @@ const { vec2, vec3, vec4, quat, mat2, mat2d, mat3, mat4} = require("gl-matrix")
 const gl = require(path.join(glespath, "gles3.js")),
 	glfw = require(path.join(glespath, "glfw3.js")),
 	vr = require(path.join(glespath, "openvr.js")),
-	audio = require(path.join(glespath, "audio.js")),
+	//audio = require(path.join(glespath, "audio.js")),
 	glutils = require(path.join(glespath, "glutils.js"));
 
 if (!glfw.init()) {
@@ -506,7 +506,7 @@ function animate() {
 	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
 	// render the cube with the texture we just rendered to
-    gl.bindTexture(gl.TEXTURE_2D, fbo.colorTexture);
+  gl.bindTexture(gl.TEXTURE_2D, fbo.colorTexture);
 	quadprogram.begin();
 	quadprogram.uniform("u_scale", 1, 1);
 	quad.bind().draw().unbind();
