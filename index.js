@@ -1,6 +1,8 @@
 const path = require("path"),
 	fs = require("fs"),
-	assert = require("assert")
+	assert = require("assert"),
+  cloneDeep = require('lodash.clonedeep')
+
 
 const glespath = path.join(__dirname, "..", "node-gles3")
 
@@ -63,26 +65,33 @@ let name = 0
 // hand state machine:
 function handStateMachine() {
 	let currentpath
-	let selectedpath
+	let selectedpath = {}
 	let state = none
-	let value = 0
+	let value = vec3.create()
 
 	function none(event) {
+
+		// associate size with trigger pressed range typeof float [0-1]
+		if (event.trigger) {
+			//console.log(`VALUE: ${event.trigger}`)
+			size = event.trigger
+		}
+
 		// handle a trigger down event
 		if (event.pressed) {
-			value = event.value
-			console.log(`VALUE: ${value}`)
 			// start a new path:
 			currentpath = {
 				pos: vec3.clone(event.pos),
 				hue: Math.random() * 360,
 				deltas: [],
+				//size: size
 				//name: name
 			}
 			//currentpath.name = name
 			paths.push(currentpath)
 			state = drawing
 		}
+
 		if (event.grip) {
 			console.log(`GRIP EVENT`)
 			state = selecting
@@ -93,6 +102,16 @@ function handStateMachine() {
 		// exit conditions
 		if (!event.pressed) {
 			currentpath.isComplete = true
+			selectedpath = cloneDeep(currentpath)
+			displaypaths.push(selectedpath)
+
+			// console.log(`current path:`)
+			// console.log(JSON.stringify(currentpath.pos))
+			// console.log(`selected path:`)
+			// console.log(JSON.stringify(selectedpath.pos))
+
+			// TODO: compute bounding slab (or sphere..) for simple controller grip - box ray casting
+			// import or perhaps just compare controller quad/cube distance to displaced tinkering curve
 			currentpath = null
 
 			state = none
@@ -100,6 +119,7 @@ function handStateMachine() {
 		}
 
 		// continue drawing:
+		// TODO: can perhaps add the size range change as type of delta change | unsure of best way to replicate from existing WebXR/ThreeJS (for now)
 		let delta = {
 			pos: vec3.clone(event.pos),
 			dpos: vec3.clone(event.dpos)
@@ -114,6 +134,9 @@ function handStateMachine() {
 			state = none
 			return;
 		}
+
+		// TODO: check grip pos against selectedpath pos
+
 	}
 
 	return function(event) {
@@ -127,7 +150,7 @@ let RHSM = handStateMachine()
 
 let DPSM = handStateMachine()
 
-let display_event =  {
+let display =  {
 	pos: vec3.create(),
 	dpos: vec3.create(), // velocity
 	mat: mat4.create()
@@ -163,6 +186,28 @@ function updatePaths() {
 		// update location of entire stroke
 		vec3.copy(path.pos, p0.pos)
 	}
+
+	// display each line:
+	for (let path of displaypaths) {
+		// don't display current path
+		if (!path.isComplete) continue;
+		if (path.deltas.length <= 1) continue;
+
+		// shift path end-on-end
+		let p = path.deltas.shift();
+		let p0 = path.deltas[0]
+		let p1 = path.deltas[path.deltas.length-1]
+		path.deltas.push(p);
+
+		//move path to preset location:
+		let d = vec3.create()
+		vec3.set(d, display_align[0], display_align[1], display_align[2])
+		// move it by the last segment too:
+		vec3.add(p.pos, p1.pos, p1.dpos)
+		vec3.sub(p.pos, p.pos, d)
+		//vec3.copy(path.pos, d)
+	}
+
 }
 
 function displayPaths() {
@@ -351,7 +396,7 @@ void main() {
 	// convert to distance:
 	float dist = max(0., 1.0 - length(pc));
 	// paint
-		outColor = vec4(dist) * v_color;
+	outColor = vec4(dist) * v_color;
 }
 `)
 let pointsgeom = {
@@ -389,7 +434,6 @@ void main() {
 }
 `);
 let quad = glutils.createVao(gl, glutils.makeQuad(), quadprogram.id);
-
 let cubeprogram = glutils.makeProgram(gl,
 `#version 330
 uniform mat4 u_modelmatrix;
@@ -455,6 +499,7 @@ let left_hand_event = {
 	mat: mat4.create()
 }
 let right_hand_event = left_hand_event
+let display_event = left_hand_event
 let hmd;
 
 function makeHandEvent(input, old_event) {
@@ -491,7 +536,7 @@ function animate() {
 	// update simulation
 	updatePaths()
 	// initial handle of tinkering paths
-	//displayPaths()
+	displayPaths()
 
 	let line_count = 0;
 	let point_count = 0;
@@ -507,23 +552,27 @@ function animate() {
 		} else if (input.handedness == "left" && input.targetRaySpace) {
 
 			left_hand_event = makeHandEvent(input, left_hand_event)
+			//display_event = makeHandEvent(input, display_event)
 			LHSM( left_hand_event )
+			//DPSM( display_event )
 			DPSM( left_hand_event )
 
 			vec3.copy(points.geom.vertices.subarray(point_count*3, point_count*3+3), left_hand_event.pos);
-			//point_count++;
-			vec3.copy(points.geom.vertices.subarray(point_count*3, point_count*3+3), display_event.pos);
 			point_count++;
+			//vec3.copy(points.geom.vertices.subarray(point_count*3, point_count*3+3), display_event.pos);
+			//point_count++;
 
 		} else if (input.handedness == "right" && input.targetRaySpace) {
+
 			right_hand_event = makeHandEvent(input, right_hand_event)
 			//display_event = makeHandEvent(input, display_event)
 			RHSM( right_hand_event )
-			DPSM( display_event )
+			DPSM( right_hand_event )
+
 			vec3.copy(points.geom.vertices.subarray(point_count*3, point_count*3+3), right_hand_event.pos);
-			//point_count++;
-			vec3.copy(points.geom.vertices.subarray(point_count*3, point_count*3+3), display_event.pos);
 			point_count++;
+			// vec3.copy(points.geom.vertices.subarray(point_count*3, point_count*3+3), display_event.pos);
+			// point_count++;
 		}
 	}
 
