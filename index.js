@@ -51,7 +51,6 @@ glfw.setWindowPos(window, 25, 25)
 //////////////////////////////////////////////////
 
 
-
 let paths = []
 let displaypaths = []
 
@@ -59,24 +58,34 @@ const world_min = [-2, 0, -2]
 const world_max = [ 2, 3,  2]
 
 const display_align = [-0.5, 1, -0.5]
+let name = 0
 
 // hand state machine:
 function handStateMachine() {
 	let currentpath
-
+	let selectedpath
 	let state = none
+	let value = 0
 
 	function none(event) {
 		// handle a trigger down event
 		if (event.pressed) {
+			value = event.value
+			console.log(`VALUE: ${value}`)
 			// start a new path:
 			currentpath = {
 				pos: vec3.clone(event.pos),
 				hue: Math.random() * 360,
-				deltas: []
+				deltas: [],
+				//name: name
 			}
+			//currentpath.name = name
 			paths.push(currentpath)
 			state = drawing
+		}
+		if (event.grip) {
+			console.log(`GRIP EVENT`)
+			state = selecting
 		}
 	}
 
@@ -98,6 +107,15 @@ function handStateMachine() {
 		currentpath.deltas.push(delta);
 	}
 
+	function selecting(event) {
+		// exit conditions
+		if (!event.grip) {
+			console.log(`SELECTING`)
+			state = none
+			return;
+		}
+	}
+
 	return function(event) {
 		// dispatch to whatever function `state` currently points to:
 		state(event)
@@ -109,17 +127,25 @@ let RHSM = handStateMachine()
 
 let DPSM = handStateMachine()
 
+let display_event =  {
+	pos: vec3.create(),
+	dpos: vec3.create(), // velocity
+	mat: mat4.create()
+}
+
 function updatePaths() {
 	// animate each line:
 	for (let path of paths) {
 		// don't animate current path
 		if (!path.isComplete) continue;
 		if (path.deltas.length <= 1) continue;
+
 		// mutate path:
 		// for (let p of path.deltas) {
 		//   p.dx += (Math.random() - 0.5);
 		//   p.dy += (Math.random() - 0.5);
 		// }
+
 		// shift path end-on-end
 		let p = path.deltas.shift();
 		let p0 = path.deltas[0]
@@ -127,13 +153,14 @@ function updatePaths() {
 		path.deltas.push(p);
 		// move it by the last segment too:
 		vec3.add(p.pos, p1.pos, p1.dpos)
-		// wrap at edges
+
+		// wrap at edges:
 		for (let i=0; i<3; i++) {
 			if (p.pos[i] > world_max[i]) p.pos[i] -= (world_max[i]-world_min[i])
 			if (p.pos[i] < world_min[i]) p.pos[i] += (world_max[i]-world_min[i])
 		}
 
-		// update location of entire strokedxe4
+		// update location of entire stroke
 		vec3.copy(path.pos, p0.pos)
 	}
 }
@@ -208,47 +235,6 @@ void main() {
 // create a VAO from a basic geometry and shader
 let line = glutils.createVao(gl, glutils.makeLine({ min:0, max:1, div: 2 }), lineprogram.id);
 
-let displaylineprogram = glutils.makeProgram(gl,
-`#version 330
-uniform mat4 u_viewmatrix;
-uniform mat4 u_projmatrix;
-
-// instance variables:
-in vec4 i_color;
-in vec3 i_pos0;
-in vec3 i_pos1;
-
-in float a_position; // not actually used...
-in vec2 a_texCoord;
-
-out vec4 v_color;
-out float v_t;
-
-void main() {
-	float t = a_texCoord.x;
-	vec3 dpos = i_pos1 - i_pos0;
-	float len = length(dpos);
-	vec4 vertex = vec4( mix( i_pos0, i_pos1, t), 1.);
-
-	gl_Position = u_projmatrix * u_viewmatrix * vertex;
-	float f = 0.1;
-	v_color = i_color * clamp(f/(f + len), 0., 1.);
-	v_t = t;
-}
-`,
-`#version 330
-precision mediump float;
-
-in vec4 v_color;
-in float v_t;
-out vec4 outColor;
-
-void main() {
-	outColor = v_color;
-}
-`);
-let displayline  = glutils.createVao(gl, glutils.makeLine({ min:0, max:1, div:2}), displaylineprogram.id);
-
 // create a VBO & friendly interface for the instances:
 // TODO: could perhaps derive the fields from the vertex shader GLSL?
 let lines = glutils.createInstances(gl, [
@@ -256,11 +242,6 @@ let lines = glutils.createInstances(gl, [
 	{ name:"i_pos0", components:3 },
 	{ name:"i_pos1", components:3 },
 ], MAX_NUM_LINES)
-let displaylines = glutils.createInstances(gl, [
-	{ name:"i_color", components:4 },
-	{ name:"i_pos0", components:3 },
-	{ name:"i_pos1", components:3 },
-], MAX_NUM_LINES);
 
 // the .instances provides a convenient interface to the underlying arraybuffer
 lines.instances.forEach((obj, i) => {
@@ -275,6 +256,54 @@ lines.instances.forEach((obj, i) => {
 })
 lines.bind().submit().unbind();
 
+// attach these instances to an existing VAO:
+lines.attachTo(line);
+
+let displaylineprogram = glutils.makeProgram(gl,
+	`#version 330
+	uniform mat4 u_viewmatrix;
+	uniform mat4 u_projmatrix;
+
+	// instance variables:
+	in vec4 i_color;
+	in vec3 i_pos0;
+	in vec3 i_pos1;
+
+	in float a_position; // not actually used...
+	in vec2 a_texCoord;
+
+	out vec4 v_color;
+	out float v_t;
+
+	void main() {
+		float t = a_texCoord.x;
+		vec3 dpos = i_pos1 - i_pos0;
+		float len = length(dpos);
+		vec4 vertex = vec4( mix( i_pos0, i_pos1, t), 1.);
+
+		gl_Position = u_projmatrix * u_viewmatrix * vertex;
+		float f = 0.1;
+		v_color = i_color * clamp(f/(f + len), 0., 1.);
+		v_t = t;
+	}
+	`,
+	`#version 330
+	precision mediump float;
+
+	in vec4 v_color;
+	in float v_t;
+	out vec4 outColor;
+
+	void main() {
+		outColor = v_color;
+	}
+	`);
+let displayline  = glutils.createVao(gl, glutils.makeLine({ min:0, max:1, div:2}), displaylineprogram.id);
+let displaylines = glutils.createInstances(gl, [
+	{ name:"i_color", components:4 },
+	{ name:"i_pos0", components:3 },
+	{ name:"i_pos1", components:3 },
+], MAX_NUM_LINES);
 displaylines.instances.forEach((obj, i) => {
 	let p = i/displaylines.count;
 	let a = Math.PI * 2 * p;
@@ -286,9 +315,6 @@ displaylines.instances.forEach((obj, i) => {
 	vec3.set(obj.i_pos1, x, 1, z);
 })
 displaylines.bind().submit().unbind();
-
-// attach these instances to an existing VAO:
-lines.attachTo(line);
 displaylines.attachTo(displayline);
 
 let pointsprogram = glutils.makeProgram(gl,
@@ -429,7 +455,6 @@ let left_hand_event = {
 	mat: mat4.create()
 }
 let right_hand_event = left_hand_event
-let display_event = left_hand_event
 let hmd;
 
 function makeHandEvent(input, old_event) {
@@ -466,7 +491,7 @@ function animate() {
 	// update simulation
 	updatePaths()
 	// initial handle of tinkering paths
-	displayPaths()
+	//displayPaths()
 
 	let line_count = 0;
 	let point_count = 0;
@@ -478,22 +503,25 @@ function animate() {
 	for (let input of inputs) {
 		if (input.targetRayMode == "gaze") {
 			hmd = input;
+
 		} else if (input.handedness == "left" && input.targetRaySpace) {
+
 			left_hand_event = makeHandEvent(input, left_hand_event)
-			display_event = makeHandEvent(input, display_event)
 			LHSM( left_hand_event )
-			DPSM( display_event )
+			DPSM( left_hand_event )
+
 			vec3.copy(points.geom.vertices.subarray(point_count*3, point_count*3+3), left_hand_event.pos);
-			point_count++;
+			//point_count++;
 			vec3.copy(points.geom.vertices.subarray(point_count*3, point_count*3+3), display_event.pos);
 			point_count++;
+
 		} else if (input.handedness == "right" && input.targetRaySpace) {
 			right_hand_event = makeHandEvent(input, right_hand_event)
-			display_event = makeHandEvent(input, display_event)
+			//display_event = makeHandEvent(input, display_event)
 			RHSM( right_hand_event )
 			DPSM( display_event )
 			vec3.copy(points.geom.vertices.subarray(point_count*3, point_count*3+3), right_hand_event.pos);
-			point_count++;
+			//point_count++;
 			vec3.copy(points.geom.vertices.subarray(point_count*3, point_count*3+3), display_event.pos);
 			point_count++;
 		}
@@ -520,33 +548,33 @@ function animate() {
 		point_count++;
 	}
 
-	let displayline_count = 0;
-	// copy the active CPU displaypaths into the GPU line instances:
-	for (let j=0; j<displaypaths.length && point_count < NUM_POINTS; j++) {
-		// get each path in turn:
-		let path = displaypaths[j];
-		let pt0 = path.pos;
-		// loop over all points in path
-		for (let i=0; i < path.deltas.length && displayline_count < displaylines.count; i++) {
-			let p = path.deltas[i];
-			let pt1 = p.pos;
-			let displayline = displaylines.instances[displayline_count];
-			// or: pt1 = vec3.add(vec3.create(), pt0, p.dpos)
-			vec3.copy(displayline.i_pos0, pt0)
-			vec3.copy(displayline.i_pos1, pt1)
-			vec4.set(displayline.i_color, 1, 1, 1, 1);
-			pt0 = pt1
-			displayline_count++;
-		}
-		vec3.copy(points.geom.vertices.subarray(point_count*3, point_count*3+3), pt0);
-		point_count++;
-	}
+	// let displayline_count = 0;
+	// // copy the active CPU displaypaths into the GPU line instances:
+	// for (let j=0; j<displaypaths.length && point_count < NUM_POINTS; j++) {
+	// 	// get each path in turn:
+	// 	let path = displaypaths[j];
+	// 	let pt0 = path.pos;
+	// 	// loop over all points in path
+	// 	for (let i=0; i < path.deltas.length && displayline_count < displaylines.count; i++) {
+	// 		let p = path.deltas[i];
+	// 		let pt1 = p.pos;
+	// 		let displayline = displaylines.instances[displayline_count];
+	// 		// or: pt1 = vec3.add(vec3.create(), pt0, p.dpos)
+	// 		vec3.copy(displayline.i_pos0, pt0)
+	// 		vec3.copy(displayline.i_pos1, pt1)
+	// 		vec4.set(displayline.i_color, 1, 1, 1, 1);
+	// 		pt0 = pt1
+	// 		displayline_count++;
+	// 	}
+	// 	vec3.copy(points.geom.vertices.subarray(point_count*3, point_count*3+3), pt0);
+	// 	point_count++;
+	// }
 
 
 	// submit to GPU:
 	lines.bind().submit().unbind()
 	points.bind().submit().unbind()
-	displaylines.bind().submit().unbind()
+	//displaylines.bind().submit().unbind()
 
 	// render to our targetTexture by binding the framebuffer
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.id);
@@ -613,12 +641,12 @@ function animate() {
 			line.bind().drawInstanced(line_count, gl.LINES).unbind()
 			lineprogram.end();
 
-			displaylineprogram.begin();
-			displaylineprogram.uniform("u_viewmatrix", viewmatrix);
-			displaylineprogram.uniform("u_projmatrix", projmatrix);
-			// consider gl.LINE_STRIP with simpler geometry
-			displayline.bind().drawInstanced(displayline_count, gl.LINES).unbind()
-			displaylineprogram.end();
+			// displaylineprogram.begin();
+			// displaylineprogram.uniform("u_viewmatrix", viewmatrix);
+			// displaylineprogram.uniform("u_projmatrix", projmatrix);
+			// // consider gl.LINE_STRIP with simpler geometry
+			// displayline.bind().drawInstanced(displayline_count, gl.LINES).unbind()
+			// displaylineprogram.end();
 
 
 			pointsprogram.begin();
